@@ -1,0 +1,35 @@
+#!/bin/sh
+LOG="/.FETCH.LOG"
+LST="/.FETCH.LST"
+[ -z "$DOWNLOADS" ] && DOWNLOADS="/home/nolar/downloads /root/downloads"
+
+result=0
+for file in $* ; do
+	FETCHED=0
+	if expr "//$file" : '^//-' >/dev/null ; then
+	else
+		base=`/usr/bin/basename "$file"`
+		for dir in $DOWNLOADS ; do
+			full="$dir/$base"
+			if [ $FETCHED -eq 0 -a -f "$full" -a -r "$full" ] ; then
+				FETCHED=1
+				mv -f "$full" "$base"
+				echo "CMD: ""$*"	>>$LOG
+				echo "URL: ""$file"	>>$LOG
+				echo "PWD: "`pwd`	>>$LOG
+				echo "Used: ""$full"	>>$LOG
+			fi
+		done
+			if [ $FETCHED -eq 0 ] ; then
+				echo $file >>$LST
+				echo "CMD: ""$*"	>>$LOG
+				echo "URL: ""$file"	>>$LOG
+				echo "PWD: "`pwd`	>>$LOG
+				echo "Not found!!!"	>>$LOG
+#				result=1
+			fi
+		echo "------------------------------------------------" >>$LOG
+	fi
+done
+
+exit $result
