@@ -1,0 +1,124 @@
+#!/bin/sh
+ACCOUNT='guest'
+NETHOOD='/net'
+MOUNTER='mount'
+
+# determining path to folder and binary of this script
+# or link to script that was called
+
+selfpath=`dirname $0`
+if ! expr $selfpath : '/.*' > /dev/null ; then
+    selfpath=`pwd`"/$selfpath"
+fi
+selfpath=`realpath $selfpath`
+selfname="$selfpath/"`basename $0`
+
+
+
+case $1 in
+
+"")
+    if expr $selfpath : "$NETHOOD/.*" > /dev/null ; then
+        temp=`dirname  $selfname`
+	serv=`basename $temp`
+        temp=`dirname  $temp`
+	host=`basename $temp`
+        mount_smbfs -E koi8-r:cp866 -N //${ACCOUNT}@$host/$serv $selfpath
+    else
+	echo "HELLO"
+    fi
+    ;;
+
+find|search|init|setup) # finds available hosts and shares and creates them
+
+    # getting currently available hosts
+    ips=`nmblookup '*' | awk '/^[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+\.[[:digit:]]+ \*<00>/ {print $1}'`
+    for ip in $ips
+    {
+	echo -n "Checking IP $ip "
+	host=`nmblookup -A $ip | awk '/^[[:blank:]]+[^[:blank:]]+[[:blank:]]+<00> - [[:blank:]]/ {print $1; exit;}'`
+	if [ "$host" ] ; then
+###	    if [ ! -x $NETHOOD/$host.stamp ] ; then
+		# creating directory for host
+		hostdir="$NETHOOD/$host"
+		echo -n "($host):"
+###		touch $hostdir.stamp
+	        [ -x $hostdir ] || mkdir $hostdir
+		# getting available services from host
+	        servs=`smbutil view -N //${ACCOUNT}@${host} 2>/dev/null | mtc --from dos866 --to koi8 --silent | awk '/^[^[:blank:]]+[[:blank:]]+disk/ { print $1; }'`
+	        for serv in $servs
+	        {
+		    # creating directory for service
+		    servdir="$hostdir/$serv"
+	    	    echo -n " $serv"
+###		    touch $servdir.stamp
+		    [ -x $servdir ] || mkdir $servdir
+		    # create mounting link if share is not mounted yet
+		    if [ `mount -t smbfs | grep -c $servdir` = 0 ] ; then
+			ln -fs "$selfname" "$servdir/$MOUNTER"
+		    fi
+		}
+		echo ""
+###	    else
+###		echo "(host duplicated)"
+###	    fi
+	else
+	    echo "(host is unavailable)"
+	fi
+    }
+    date > $NETHOOD/lastsetup
+    ;;
+
+clean|clear|flush|cleanup) # clears all unavailable hosts and shares
+    for hostdir in $NETHOOD/*
+    {
+	if [ -d $hostdir ] ; then
+	    host=`basename $hostdir`
+	    echo -n "Rechecking $host:"
+	    # checking if host is available
+	    if [ `nmblookup $host 2>/dev/null | grep -c \<00\>` != 0 ] ; then
+    		for servdir in $hostdir/*
+		{
+		    if [ -d $servdir ] ; then
+			serv=`basename $servdir`
+	    		# checking if service is available
+			if [ `smbutil view -N //${ACCOUNT}@$host 2>/dev/null | mtc --from dos866 --to koi8 --silent | grep -c "$serv .*disk"` != 0 ] ; then
+		    	    echo -n " +$serv"
+			else
+			    echo -n " -$serv"
+		    	    umount -f $servdir		>/dev/null 2>&1
+			    rm -d $servdir/$MOUNTER	>/dev/null 2>&1
+		    	    rm -d $servdir		>/dev/null 2>&1
+			fi
+		    fi
+		}
+		echo ""
+	    else
+		# clearing shares of unavaliuable host
+		for servdir in $hostdir/*
+		{
+		    if [ -d $servdir ] ; then
+    	    		umount -f $servdir	>/dev/null 2>&1
+			rm -d $servdir/$MOUNTER	>/dev/null 2>&1
+			rm -d $servdir		>/dev/null 2>&1
+		    fi
+		}
+		# clearing unavailable host itself
+			rm -d $hostdir		>/dev/null 2>&1
+			echo " (unavailable)"
+	    fi
+	fi
+    }
+    date > $NETHOOD/lastcleaned
+    ;;
+
+free|release|umount|unmount)
+    for share in `mount -t smbfs | grep " $NETHOOD/" | awk '{print $3}'`
+    {
+	umount $share 2>/dev/null
+    }
+    date > $NETHOOD/lastfreed
+    ;;
+esac
+
+return 0
