@@ -1,0 +1,142 @@
+#!/bin/sh
+#
+# (a) 2006 nolar@numeri.net
+#
+# ...
+#
+
+pwconf="/etc/pw.www.conf"
+sitedir="/usr/local/www/data"
+vhostdir="/usr/local/etc/apache2/vhosts"
+firewall="/etc/firewall"
+
+#
+echo "Script for semiautomatic creation of hosted sites on numeri.net."
+echo "(a) 2004-2006 nolar@numeri.net"
+echo ""
+
+# getting options
+if [ "$#" -eq "0" ] ; then
+	echo "Usage:"
+	echo "  $0 [options] site1 site2 [options] site3 ..."
+	echo ""
+	echo "Options have specified values since definition till redefinition or till the end of script."
+	echo ""
+	echo "Supported options are:"
+	echo "  -o <username/userid>	-- Forces this user to be owner of newly created site(s)."
+	echo ""
+	exit 2
+fi
+
+#
+[ -f "$pwconf" -a -r "$pwconf" ] || { echo "Misconfig: pwconf. "; exit 1; }
+[ -d "$sitedir" -a -w "$sitedir" ] || { echo "Misconfig: sitedir is not writeable. "; exit 1; }
+[ -d "$vhostdir" -a -w "$vhostdir" ] || { echo "Misconfig: vhostdir is not writeable. "; exit 1; }
+
+# executing
+owner=""
+while [ $# -gt 0 ] ; do case $1 in
+	-o)
+		owner="$2"
+		shift 2;;
+	-*)
+		echo "===> Unknown option '$1'. Ignoring."
+		shift;;
+	*)
+		domain="$1"
+		shift 1
+
+		domain=`echo "$domain" | sed -e 's/.*\///g' -e 'y/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/' -e 's/^\.*//' -e 's/\.*$//' -e 's/\.\.*/\./g' -e 's/^www\.//'` || exit
+		if { [ ! -z "$domain" ] && expr "$domain" : '[abcdefghijklmnopqrstuvwxyz0123456789\._-]*$' >/dev/null; } ; then
+			echo "===> Trying to create site with domain name '$domain'."
+
+			#
+			siteowner="$owner"
+			if pw usershow "$siteowner" >/dev/null 2>&1 ; then
+				echo "---> Using specified user name/id '$siteowner' as owner of the site."
+			else
+				if [ -z "$siteowner" ] ; then
+					siteowner=`echo "$domain" | sed -E -e 's/[\._]/-/g' -e 's/^([^-]*)-.*$/www-\\1/'`
+					if pw usershow "$siteowner" >/dev/null 2>&1 ; then
+						echo "---> Generated user name '$siteowner', but it is already in use. Skipping."
+						continue
+					else
+						echo "---> Generated user name '$siteowner' and creating it."
+					fi
+				else
+					if expr "$siteowner" : '[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890-]*$' ; then
+						echo "---> Using owner '$siteowner' for site."
+					else
+						echo "---> User name or id '$siteowner' is invalid and can not be used. Skipping."
+						continue
+					fi
+				fi
+
+				if pw useradd -C "$pwconf" -n "$siteowner" -c "www.$domain" -d "$sitedir/$domain" >/dev/null ; then
+					echo "---> User name/id '$siteowner' was just created. Do not forget to set its password with passwd(1)."
+				fi
+			fi
+
+			if pw usershow "$siteowner" >/dev/null 2>&1 ; then
+			else
+				echo "---> User name/id '$siteowner' was not created somewhy. Skipping."
+				continue
+			fi
+
+			#
+			echo "---> Generating directory structure of the site ($sitedir/$domain)."
+			mkdir -m 0755 "$sitedir/$domain"
+			mkdir -m 0755 "$sitedir/$domain/cgi-bin"
+			[ -f "$sitedir/$domain/cgi-bin/.htaccess" ] || {
+				echo "Options +ExecCGI"		>  "$sitedir/$domain/cgi-bin/.htaccess"
+				echo "SetHandler cgi-script"	>> "$sitedir/$domain/cgi-bin/.htaccess"
+			}
+			[ -f "$sitedir/$domain/.transfer" ] || { touch "$sitedir/$domain/.transfer"; chmod 0600 "$sitedir/$domain/.transfer"; }
+			[ -f "$sitedir/$domain/.errors"   ] || { touch "$sitedir/$domain/.errors"  ; chmod 0600 "$sitedir/$domain/.errors"  ; }
+			chown -R "$siteowner:$siteowner" "$sitedir/$domain"
+
+			#
+			echo "---> Generating config include for apache ($vhostdir/$domain)."
+			echo "<VirtualHost *>"					>  "$vhostdir/$domain"
+			echo "ServerName	    $domain"			>> "$vhostdir/$domain"
+			echo "ServerAlias	www.$domain"			>> "$vhostdir/$domain"
+			echo "DocumentRoot	$sitedir/$domain/"		>> "$vhostdir/$domain"
+			echo "TransferLog	$sitedir/$domain/.transfer"	>> "$vhostdir/$domain"
+			echo "ErrorLog	$sitedir/$domain/.errors"	>> "$vhostdir/$domain"
+			echo "SuexecUserGroup	$siteowner $siteowner"		>> "$vhostdir/$domain"
+			echo "</VirtualHost>"					>> "$vhostdir/$domain"
+
+			# restarting apache (to reload new vhost config).
+			echo "---> Checking apache syntax and restarting it."
+			if apachectl configtest >/dev/null ; then
+				apachectl restart
+			else
+				echo "!!!> WARNING! Apache was not restarted! Bad config (see above)."
+				echo "!!!> WARNING! Fix this immediately, or your apache could not start next time."
+			fi
+
+			# reloading firewall (to prohibit user's traffic)
+			[ -f "$firewall" -a -x "$firewall" ] && {
+				echo "---> Reloading firewall ($firewall)."
+				$firewall
+			}
+
+			# create mysql here someway???
+			echo "---> If you need MySQL database, create it manually."
+
+			# report ok.
+			echo "---> DONE."
+		else
+			echo "===> Bad domain name '$domain'. Ignoring."
+			continue
+		fi
+		;;
+	esac
+done
+
+#
+echo "===> Script finished. Bye."
+
+#
+# End.
+#
